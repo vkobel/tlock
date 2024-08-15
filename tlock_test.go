@@ -2,6 +2,7 @@ package tlock_test
 
 import (
 	"bytes"
+	"crypto/sha256"
 	_ "embed" // Calls init function.
 	"errors"
 	"os"
@@ -11,7 +12,9 @@ import (
 	"time"
 
 	"github.com/drand/drand/crypto"
+	"github.com/drand/kyber"
 	bls "github.com/drand/kyber-bls12381"
+	"github.com/drand/kyber/util/random"
 	"github.com/stretchr/testify/require"
 
 	"github.com/drand/drand/chain"
@@ -34,6 +37,57 @@ const (
 	mainnetFastnet       = "dbd506d6ef76e5f386f41c651dcb808c5bcbd75471cc4eafa3f4df7ad4e4c493"
 	mainnetQuicknet      = "52db9ba70e0cc0f6eaf7803dd07447a1f5477735fd3f661792ba94600c84e971"
 )
+
+func TestEncryptionToArbitraryID(t *testing.T) {
+
+	// =========================================================================
+	// Encrypt
+
+	// Read the plaintext data to be encrypted.
+	in, err := os.Open("testdata/data.txt")
+	require.NoError(t, err)
+	defer in.Close()
+
+	// Write the encoded information to this buffer.
+	var cipherData bytes.Buffer
+
+	var id = sha256.Sum256([]byte("arbitrary-id"))
+
+	sch, err := crypto.SchemeFromName(crypto.SigsOnG1ID)
+	require.NoError(t, err)
+
+	// generate key pair https://github.com/drand/kyber/blob/94dae51d79b4b0c2d2a9b9cc382b864cf3537783/encrypt/ibe/ibe_test.go#L24C3-L32C40
+	suite := bls.NewBLS12381Suite()
+	P := suite.G1().Point().Base()
+	s := suite.G1().Scalar().Pick(random.New())
+	//Ppub := suite.G1().Point().Mul(s, P)
+
+	ID := []byte("passtherand")
+	IDP := suite.G2().Point().(kyber.HashablePoint)
+	Qid := IDP.Hash(ID) // public key
+	//sQid := Qid.Mul(s, Qid) // secret key
+
+	// read in contents to bytes
+	contents := make([]byte, 0)
+	_, err = in.Read(contents)
+	require.NoError(t, err)
+
+	ct, err := tlock.IDLock(*sch, Qid, id[:], contents)
+	require.NoError(t, err)
+
+	// =========================================================================
+	// Decrypt
+
+	// Write the decoded information to this buffer.
+	var plainData bytes.Buffer
+
+	err = tlock.New(network).Decrypt(&plainData, &cipherData)
+	require.NoError(t, err)
+
+	if !bytes.Equal(plainData.Bytes(), dataFile) {
+		t.Fatalf("decrypted file is invalid; expected %d; got %d", len(dataFile), len(plainData.Bytes()))
+	}
+}
 
 func TestEarlyDecryptionWithDuration(t *testing.T) {
 	for host, hashes := range map[string][]string{testnetHost: {testnetUnchainedOnG2, testnetQuicknetT},
